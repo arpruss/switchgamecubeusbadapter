@@ -1,6 +1,48 @@
-#include <USBComposite.h> // https://github.com/arpruss/USBComposite_stm32f1
-#include <GameControllers.h> // https://github.com/arpruss/GameControllersSTM32
+#include <USBComposite.h>
+#include <GameControllers.h>
 
+#define LED PC13
+#define NUM_CONTROLLERS 1
+// Facing GameCube socket (as on console), flat on top:
+//    123
+//    ===
+//    456
+
+// Connections for GameCube adapter:
+// GameCube 2--PA6
+// GameCube 2--1Kohm--3.3V
+// GameCube 3--GND
+// GameCube 4--GND
+// GameCube 6--3.3V
+const uint32_t gamecubePins[NUM_CONTROLLERS] = {PA6};
+
+
+const uint8_t MAX_MISSED = 8; // if 8 reads are missed, we count the controller disconnected
+uint8_t missed[NUM_CONTROLLERS] = { 0 };
+
+GameCubeController gcc0(gamecubePins[0]);
+#if NUM_CONTROLLERS >= 2
+GameCubeController gcc1(gamecubePins[1]);
+#endif
+#if NUM_CONTROLLERS >= 3
+GameCubeController gcc2(gamecubePins[2]);
+#endif
+#if NUM_CONTROLLERS >= 4
+GameCubeController gcc3(gamecubePins[3]);
+#endif
+
+GameCubeController* gccs[NUM_CONTROLLERS] = {
+  &gcc0,
+#if NUM_CONTROLLERS >= 2
+  &gcc1,
+#endif  
+#if NUM_CONTROLLERS >= 3
+  &gcc2,
+#endif  
+#if NUM_CONTROLLERS >= 4
+  &gcc3,
+#endif  
+};
 
 #define VENDOR_ID 0x057E 
 #define PRODUCT_ID 0x0337
@@ -120,6 +162,7 @@ const uint16_t gcmaskA = 0x01;
 const uint16_t gcmaskB = 0x02;
 const uint16_t gcmaskX = 0x04;
 const uint16_t gcmaskY = 0x08;
+const uint16_t gcmaskStart = 0x10;
 const uint16_t gcmaskDLeft = 0x100;
 const uint16_t gcmaskDRight = 0x200;
 const uint16_t gcmaskDDown = 0x400;
@@ -157,8 +200,10 @@ class HIDGameCubeAdapter : public HIDReporter {
 public:
   MainGameCubeReport_t mainReport; 
   
-  
   void begin() {
+      for (int i=0;i<NUM_CONTROLLERS; i++)
+        gccs[i]->begin();
+    
       USBComposite.setVendorId(VENDOR_ID);
       USBComposite.setProductId(PRODUCT_ID);
       USBComposite.setProductString("Gamecube Adapter");
@@ -200,16 +245,57 @@ void setup() {
   adapter.begin();
   while (!USBComposite);
   delay(1000);
-  adapter.mainReport.payload[0].state = GAMECUBE_CONTROLLER_ENABLED;
+}
+
+uint8_t fixDeadZone(uint8_t x) {
+  return 255;
+  if (128 - 40 < x && x < 128 + 40)
+    return 128;
+  else
+    return x;
+}
+
+uint16_t buttonsToUSB(uint16_t controllerButtons) {
+  uint16_t abxy = controllerButtons & 0xF;
+  uint16_t dpad = (controllerButtons >> 8) & 0xF;
+  uint16_t z = (controllerButtons & gcmaskZ) != 0;
+  uint16_t s = (controllerButtons & gcmaskStart) != 0;
+  uint16_t rl = (controllerButtons >> 13) & 0x3;
+  return abxy | (dpad << 4) | (s << 8) | (z << 9) | (rl << 10);
 }
 
 void loop() {  
-  adapter.mainReport.payload[0].data.joystickX = 255;
+/*  adapter.mainReport.payload[0].data.joystickX = 255;
   adapter.mainReport.payload[0].data.buttons |= gcmaskA;
   adapter.sendReport();
   delay(300);
   adapter.mainReport.payload[0].data.joystickX = 0;
   adapter.mainReport.payload[0].data.buttons &= ~gcmaskA;
   adapter.sendReport();
-  delay(300);
+  delay(300); */
+  boolean haveOne = false;
+  for (int i=0; i<NUM_CONTROLLERS; i++) {
+    bool rumble = false; // TODO
+    GameCubeData_t data;
+    bool success = gccs[i]->readWithRumble(&data, rumble);
+    if (success) {
+      adapter.mainReport.payload[i].state = GAMECUBE_CONTROLLER_ENABLED;
+      data.buttons = buttonsToUSB(data.buttons);
+      adapter.mainReport.payload[i].data = data;
+      missed[i] = 0;
+      haveOne = true;
+    }
+    else {
+      if (adapter.mainReport.payload[i].state) {
+        if (missed[i] > MAX_MISSED)
+          adapter.mainReport.payload[i].state = 0;
+        else
+          missed[i]++;
+      }
+    }
+  }
+  if (haveOne) {
+    adapter.sendReport();
+    digitalWrite(LED, !haveOne);
+  }
 }
