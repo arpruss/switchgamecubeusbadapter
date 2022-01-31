@@ -1,5 +1,5 @@
-#include <USBComposite.h>
-#include <GameControllers.h>
+#include <USBComposite.h> // https://github.com/arpruss/USBComposite_stm32f1
+#include <GameControllers.h> // https://github.com/arpruss/GameControllersSTM32
 
 
 #define VENDOR_ID 0x057E 
