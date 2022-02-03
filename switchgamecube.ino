@@ -1,6 +1,12 @@
 #include <USBComposite.h>
 #include <GameControllers.h>
 
+//#define TEST
+//#define OFFICIAL_REPORT // if this is commented out, the first GC controller will work on PC without any special drives, but compatibility with other devices may be reduced
+
+#define VENDOR_ID 0x057E
+#define PRODUCT_ID 0x0337
+
 #define LED PC13
 #define NUM_CONTROLLERS 1
 #define RUMBLE 
@@ -10,11 +16,13 @@
 //    456
 
 // Connections for GameCube adapter:
+// Optional and untested (use at own risk): GameCube 1--5V for better rumbling
 // GameCube 2--PA6
 // GameCube 2--1Kohm--3.3V
 // GameCube 3--GND
 // GameCube 4--GND
 // GameCube 6--3.3V
+
 const uint32_t gamecubePins[NUM_CONTROLLERS] = {PA6};
 #ifdef RUMBLE
 uint8_t rumbles[NUM_CONTROLLERS] = {0};
@@ -55,16 +63,14 @@ GameCubeController* gccs[NUM_CONTROLLERS] = {
 #endif  
 };
 
-#define VENDOR_ID 0x057E 
-#define PRODUCT_ID 0x0337
-#define LED PB12
 
-#define MAIN_REPORT_ID 33
+#define MAIN_REPORT_ID 0x21
 #define RUMBLE_REPORT_ID 17
 
 USBHID HID;
 
 uint8_t gameCubeAdapterReportDescriptor[] = {
+#ifdef OFFICIAL_REPORT
 0x05, 0x05,        // Usage Page (Game Ctrls)
 0x09, 0x00,        // Usage (Undefined)
 0xA1, 0x01,        // Collection (Application)
@@ -167,6 +173,42 @@ uint8_t gameCubeAdapterReportDescriptor[] = {
 0x95, 0x02,        //   Report Count (2)
 0x81, 0x00,        //   Input (Data,Array,Abs,No Wrap,Linear,Preferred State,No Null Position)
 0xC0,              // End Collection
+#else
+0x05, 0x01,           /*  Usage Page (Generic Desktop) */ 
+0x09, 0x05,           /*  Usage (Joystick) */ 
+0xA1, 0x01,           /*  Collection (Application) */ 
+0x85, 0x21,           //   Report ID (33)
+0x75, 0x08,           //   Report Size (8)
+0x95, 0x01,           //   Report Count (1)
+0x81, 0x03,           //     INPUT = Cnst,Var,Abs
+/* buttons */ 
+0x15, 0x00,           /*  Logical Minimum (0) */ 
+0x25, 0x01,           /*  Logical Maximum (1) */ 
+0x75, 0x01,           /*  Report Size (1) */ 
+0x95, 0x0C,           /*  Report Count (12) */ 
+0x05, 0x09,           /*  Usage Page (9) */ 
+0x19, 0x01,           /*  Usage Minimum (1) */ 
+0x29, 0x0C,           /*  Usage Maximum (12) */ 
+0x81, 0x02,           /*  Input (Data,Var,Abs) */ 
+0x95, 0x04,           /*  Report Count (4) */ 
+0x81, 0x03,          //     INPUT = Cnst,Var,Abs
+  /* sticks */ 
+0x05, 0x01,                     /* Usage Page (Generic Desktop) */ \
+0x26, 0xFF, 0x00,        /*  Logical Maximum (255) */ 
+0x09, 0x30,             /*  Usage (48) */ 
+0x09, 0x31,             /*  Usage (49) */ 
+0x09, 0x32,             /*  Usage (50) */ 
+0x09, 0x35,             /*  Usage (53) */ 
+0x09, 0x36,           /*  Usage (Slider) */ 
+0x09, 0x36,           /*  Usage (Slider) */ 
+0x75, 0x08,           /*  Report Size (8) */ 
+0x95, 0x06,           /*  Report Count (6) */ 
+0x81, 0x02,           /*  Input (Data,Var,Abs) */ 
+0x75, 0x08,        //   Report Size (8)
+0x95, 0x1B,        //   Report Count (36-9)
+0x81, 0x03,          //     INPUT = Cnst,Var,Abs
+0xC0,                 /*  End Collection */
+#endif
 };
 
 /*
@@ -213,9 +255,6 @@ public:
   MainGameCubeReport_t mainReport; 
   
   void begin() {
-      for (int i=0;i<NUM_CONTROLLERS; i++)
-        gccs[i]->begin();
-    
       USBComposite.setVendorId(VENDOR_ID);
       USBComposite.setProductId(PRODUCT_ID);
       USBComposite.setProductString("Gamecube Adapter");
@@ -232,7 +271,7 @@ public:
         memset(&mainReport, 0, sizeof(mainReport));
         mainReport.reportId = MAIN_REPORT_ID;
         for (int i=0;i<4;i++) {
-          mainReport.payload[i].data.buttons = 0x8000;
+          mainReport.payload[i].data.buttons = 0; // 0x8000;
           mainReport.payload[i].data.joystickX = 128;
           mainReport.payload[i].data.joystickY = 128;
           mainReport.payload[i].data.cX = 128;
@@ -243,14 +282,6 @@ public:
 HIDGameCubeAdapter adapter(HID);
 
 uint8_t buffer[64];
-
-/*
-void show(uint8_t x) {
-    for (int i = 0 ; i < 4; i++) {
-      digitalWrite(indicatorLEDs[i], ! ((x >> i) & 1));
-    }
-}
-*/
 
 void newData(void* extra, volatile void* buffer, uint16_t size) {
   
@@ -264,11 +295,10 @@ void newData(void* extra, volatile void* buffer, uint16_t size) {
 
 void setup() {
   pinMode(LED, OUTPUT);
-/*  for (int i=0; i<4; i++) {
-    pinMode(indicatorLEDs[i], OUTPUT);
-    digitalWrite(indicatorLEDs[i], 1);
-  } */
-  digitalWrite(LED, 1);
+
+  for (int i=0;i<NUM_CONTROLLERS; i++)
+    gccs[i]->begin();
+
   usb_hid_setDedicatedRXEndpoint(buffer, sizeof(buffer), newData, NULL);
   adapter.begin();
   while (!USBComposite);
@@ -284,15 +314,30 @@ uint16_t buttonsToUSB(uint16_t controllerButtons) {
   return abxy | (dpad << 4) | (s << 8) | (z << 9) | (rl << 10);
 }
 
+void xloop() {
+  digitalWrite(LED,0);
+}
+
 void loop() {  
-/*  adapter.mainReport.payload[0].data.joystickX = 255;
-  adapter.mainReport.payload[0].data.buttons |= gcmaskA;
+#ifdef TEST
+  adapter.mainReport.payload[0].state = GAMECUBE_CONTROLLER_ENABLED;
+  adapter.mainReport.payload[0].data.joystickX = 128;
+  adapter.mainReport.payload[0].data.joystickY = 128;
+  adapter.mainReport.payload[0].data.buttons = 0;
   adapter.sendReport();
+  digitalWrite(LED,1);
+  delay(300);
+  adapter.mainReport.payload[0].data.joystickX = 255;
+  adapter.mainReport.payload[0].data.buttons = buttonsToUSB(gcmaskA);
+  adapter.sendReport();
+  digitalWrite(LED,0);
   delay(300);
   adapter.mainReport.payload[0].data.joystickX = 0;
-  adapter.mainReport.payload[0].data.buttons &= ~gcmaskA;
+  adapter.mainReport.payload[0].data.buttons = 0;
   adapter.sendReport();
-  delay(300); */
+  digitalWrite(LED,1);
+  delay(300); 
+#else  
   boolean haveOne = false;
   uint32 rumbleCount = 0;
   for (int i=0; i<NUM_CONTROLLERS; i++) {
@@ -325,7 +370,8 @@ void loop() {
   }
   if (haveOne) {
     adapter.sendReport();
-    //digitalWrite(LED, !haveOne);
+    digitalWrite(LED, !haveOne);
   }
+#endif  
 }
 
