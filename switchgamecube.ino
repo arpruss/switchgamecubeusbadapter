@@ -3,6 +3,7 @@
 
 #define LED PC13
 #define NUM_CONTROLLERS 1
+#define RUMBLE 
 // Facing GameCube socket (as on console), flat on top:
 //    123
 //    ===
@@ -15,7 +16,17 @@
 // GameCube 4--GND
 // GameCube 6--3.3V
 const uint32_t gamecubePins[NUM_CONTROLLERS] = {PA6};
+#ifdef RUMBLE
+uint8_t rumbles[NUM_CONTROLLERS] = {0};
+uint32_t lastRumbleTime = 0;
+#define RUMBLE_TIMEOUT 4000 // in case of some sort of disconnection, stop rumbling after this
+#define MAX_SIMULTANEOUS_RUMBLES  2 // to avoid too much current draw
+#define GAMECUBE_CONTROLLER_ENABLED 0x14 // NORMAL, POWERED
+#else
+#define GAMECUBE_CONTROLLER_ENABLED 0x10 // NORMAL (0x22=WAVEBIRD COMMUNICATING)
+#endif
 
+//const uint32_t indicatorLEDs[] = { PA0, PA1, PA2, PA3 };
 
 const uint8_t MAX_MISSED = 8; // if 8 reads are missed, we count the controller disconnected
 uint8_t missed[NUM_CONTROLLERS] = { 0 };
@@ -49,6 +60,7 @@ GameCubeController* gccs[NUM_CONTROLLERS] = {
 #define LED PB12
 
 #define MAIN_REPORT_ID 33
+#define RUMBLE_REPORT_ID 17
 
 USBHID HID;
 
@@ -182,7 +194,7 @@ typedef struct {
 } __packed GameCubeData_t;
 */
 
-#define GAMECUBE_CONTROLLER_ENABLED 0x10 // NORMAL (0x20=WAVEBIRD)
+// useful reference: https://github.com/FIX94/Nintendont/blob/fd5e85c4fe4c4015936e21b16242fa0f15449e99/loader/source/ppc/PADReadGC/source/PADReadGC.c
 
 typedef struct {
   uint8_t state;
@@ -232,27 +244,35 @@ HIDGameCubeAdapter adapter(HID);
 
 uint8_t buffer[64];
 
+/*
+void show(uint8_t x) {
+    for (int i = 0 ; i < 4; i++) {
+      digitalWrite(indicatorLEDs[i], ! ((x >> i) & 1));
+    }
+}
+*/
+
 void newData(void* extra, volatile void* buffer, uint16_t size) {
-  (void)extra;
-  (void)buffer;
-  (void)size;
+  
+#ifdef RUMBLE  
+  if (size == 5 && ((uint8_t*)buffer)[0] == 0x11) {
+    memcpy(rumbles,((uint8_t*)buffer)+1,NUM_CONTROLLERS);
+    lastRumbleTime = millis();    
+  }
+#endif  
 }
 
 void setup() {
   pinMode(LED, OUTPUT);
+/*  for (int i=0; i<4; i++) {
+    pinMode(indicatorLEDs[i], OUTPUT);
+    digitalWrite(indicatorLEDs[i], 1);
+  } */
   digitalWrite(LED, 1);
   usb_hid_setDedicatedRXEndpoint(buffer, sizeof(buffer), newData, NULL);
   adapter.begin();
   while (!USBComposite);
   delay(1000);
-}
-
-uint8_t fixDeadZone(uint8_t x) {
-  return 255;
-  if (128 - 40 < x && x < 128 + 40)
-    return 128;
-  else
-    return x;
 }
 
 uint16_t buttonsToUSB(uint16_t controllerButtons) {
@@ -274,8 +294,17 @@ void loop() {
   adapter.sendReport();
   delay(300); */
   boolean haveOne = false;
+  uint32 rumbleCount = 0;
   for (int i=0; i<NUM_CONTROLLERS; i++) {
-    bool rumble = false; // TODO
+    bool rumble = false;
+#ifdef RUMBLE    
+    if (rumbles[i] && millis() < lastRumbleTime+RUMBLE_TIMEOUT && rumbleCount < MAX_SIMULTANEOUS_RUMBLES) {
+      rumble = true;
+      rumbleCount++;
+    }
+#else
+    rumble = false;
+#endif    
     GameCubeData_t data;
     bool success = gccs[i]->readWithRumble(&data, rumble);
     if (success) {
@@ -296,6 +325,7 @@ void loop() {
   }
   if (haveOne) {
     adapter.sendReport();
-    digitalWrite(LED, !haveOne);
+    //digitalWrite(LED, !haveOne);
   }
 }
+
